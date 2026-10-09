@@ -1,0 +1,11 @@
+{
+  "name": "nyota",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/*", "apps/*"],
+  "scripts": {
+    "dev": "concurrently -n server,editor -c blue,magenta \"npm run dev -w @nyota/server\" \"npm run dev -w @nyota/editor\"",
+    "typecheck": "tsc -p packages/core && tsc -p apps/server && tsc -p apps/editor"
+  },
+  "devDependencies": { "concurrently": "^9.2.1", "typescript": "^5.9.3" }
+}
