@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { type DesignNode, type NodeProps, exportHtml, toTree } from "@nyota/core";
+import { zipSync, strToU8 } from "fflate";
+import { type DesignDocument, type DesignNode, type NodeProps, exportHtml, exportReact, toTree } from "@nyota/core";
 import { dispatch, useEditor } from "../store";
 
 export function Properties() {
@@ -96,6 +97,7 @@ export function Properties() {
       )}
 
       <Section title="Code">
+        <button className="ghost" onClick={() => downloadReactZip(doc, node)}>Exporter en React (.zip)</button>
         <button className="ghost" onClick={() => setCode(exportHtml(toTree(doc, node.id)))}>Exporter en HTML / CSS</button>
       </Section>
 
@@ -186,4 +188,17 @@ function CodeModal({ code, onClose }: { code: { html: string; css: string }; onC
       </div>
     </div>
   );
+}
+
+/** Un composant React par élément, empaquetés dans un .zip prêt à lancer (npm install && npm run dev). */
+function downloadReactZip(doc: DesignDocument, node: DesignNode) {
+  const files = exportReact(doc, node.id);
+  const folder = node.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\w-]+/g, "-").replace(/^-|-$/g, "") || "nyota-export";
+  const zip = zipSync(Object.fromEntries(Object.entries(files).map(([path, content]) => [`${folder}/${path}`, strToU8(content)])));
+  const url = URL.createObjectURL(new Blob([zip as BlobPart], { type: "application/zip" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${folder}-react.zip`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

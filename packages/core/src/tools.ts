@@ -8,6 +8,7 @@ import { z } from "zod";
 import { type DesignDocument, type DesignNode, makeNode, newId, toTree } from "./model.js";
 import type { Op } from "./ops.js";
 import { exportHtml } from "./export.js";
+import { exportReact } from "./export-react.js";
 
 export interface ToolContext {
   doc: DesignDocument;
@@ -169,6 +170,18 @@ export const designTools = [
       if (!doc.nodes[id]) throw new Error(`Nœud introuvable : ${id}`);
       return exportHtml(toTree(doc, id));
     },
+  }),
+
+  defineTool({
+    name: "export_react",
+    description:
+      "Exporte un nœud en projet React (Vite) : un composant .jsx + .module.css par élément. Le parent importe " +
+      "et place ses enfants ; chaque enfant ne décrit que son apparence. Renvoie un objet { chemin: contenu }.",
+    input: z.object({
+      id: z.string(),
+      project: z.boolean().optional().describe("false = seulement les composants, sans le squelette Vite"),
+    }),
+    run: ({ doc }, { id, project }) => exportReact(doc, id, { project }),
   }),
 ];
 

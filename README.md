@@ -7,7 +7,8 @@ L'humain et l'IA travaillent **dans les deux sens, sur le même document, avec l
 
 - **Capture d'écran → design** : colle une capture (Ctrl+V) et l'IA la reconstruit en calques éditables.
 - **Texte → design** : « page de paiement Mobile Money, style moderne ».
-- **Design → code** : export HTML/CSS de n'importe quelle frame.
+- **Design → React** : export en `.zip` d'un projet Vite, **un composant par élément** (voir plus bas).
+- **Design → HTML/CSS** : export rapide d'une frame.
 - **Serveur MCP intégré** : Claude Code, Claude Desktop, Cursor ou toute IA compatible MCP peut lire et dessiner dans ton document, en direct.
 
 ## Architecture
@@ -28,6 +29,26 @@ Le principe clé : **une seule définition des outils** (`packages/core/src/tool
 
 Toute modification devient une **opération** (`create`, `update`, `delete`, `move`) appliquée par le serveur,
 diffusée à tous les éditeurs ouverts et ajoutée à l'historique. Donc Ctrl+Z annule aussi ce que l'IA a fait.
+
+## Export React : un composant par élément
+
+Un texte dans une frame, elle-même dans une autre frame, donne trois composants :
+
+```
+src/components/
+  EcranAccueil/   EcranAccueil.jsx  EcranAccueil.module.css   ← importe et place CarteSolde
+  CarteSolde/     CarteSolde.jsx    CarteSolde.module.css     ← importe et place Solde
+  Solde/          Solde.jsx         Solde.module.css
+STRUCTURE.md      ← l'arbre complet : qui contient qui
+```
+
+- Le CSS d'un composant décrit **son apparence** (taille, couleur, radius, police).
+- Le CSS du **parent** décrit **où l'enfant est posé** (`left`, `top`, rotation), via la classe qu'il lui passe.
+- Chaque fichier indique en en-tête son parent et ses enfants.
+- Tous les composants acceptent `className` et `style`, les textes acceptent `text` et les conteneurs `children`.
+
+On ne cherche pas à écrire une page « parfaite » d'un coup : on obtient des briques fidèles et indépendantes,
+qu'on peut ensuite réorganiser (flexbox, données dynamiques…). Les IA y ont accès aussi via l'outil `export_react`.
 
 ## Démarrer
 

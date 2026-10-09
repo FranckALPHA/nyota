@@ -126,7 +126,7 @@ function McpModal({ onClose }: { onClose: () => void }) {
         <pre>claude mcp add --transport http nyota {url}</pre>
         <p><b>Autres clients MCP (Cursor, Claude Desktop…)</b></p>
         <pre>{JSON.stringify({ mcpServers: { nyota: { type: "http", url } } }, null, 2)}</pre>
-        <p className="hint">Outils exposés : get_document, get_selection, create_nodes, update_nodes, delete_nodes, move_node, export_code.</p>
+        <p className="hint">Outils exposés : get_document, get_selection, create_nodes, update_nodes, delete_nodes, move_node, export_code, export_react.</p>
       </div>
     </div>
   );
