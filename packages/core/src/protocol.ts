@@ -13,7 +13,8 @@ export type ServerMessage =
   | { type: "doc"; doc: DesignDocument }
   | { type: "ops"; ops: Op[]; author: Author; label?: string; origin?: string }
   | { type: "error"; message: string }
-  | { type: "ai"; event: AiEvent };
+  | { type: "ai"; event: AiEvent }
+  | { type: "presence"; editors: number; mcpLastSeen: number | null };
 
 export type AiEvent =
   | { kind: "start"; jobId: string; prompt: string }

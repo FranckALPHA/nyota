@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { Stage, Layer, Group, Rect, Ellipse, Text, Transformer } from "react-konva";
+import { Stage, Layer, Group, Rect, Ellipse, Text, Path, Image as KImage, Transformer } from "react-konva";
+import KonvaLib from "konva";
 import type Konva from "konva";
-import { type DesignDocument, type DesignNode, type NodeType, absolutePosition, makeNode } from "@nyota/core";
-import { dispatch, getState, select, setEditingText, setTool, useEditor } from "../store";
+import { DEFAULT_BACKGROUND, type DesignDocument, type DesignNode, type NodeType, absolutePosition, makeNode, resizeProps } from "@nyota/core";
+import { type View, dispatch, getState, select, setCanvasSize, setEditingText, setTool, setView, useEditor } from "../store";
 
-interface View { x: number; y: number; scale: number }
 interface Draft { type: NodeType; x0: number; y0: number; x1: number; y1: number }
 
-const ACCENT = "#7C5CFF";
+export const ACCENT = "#0D99FF";
 
 export function Canvas() {
   const doc = useEditor((s) => s.doc);
@@ -18,15 +18,16 @@ export function Canvas() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<Konva.Stage>(null);
   const trRef = useRef<Konva.Transformer>(null);
-  const [size, setSize] = useState({ w: 800, h: 600 });
-  const [view, setView] = useState<View>({ x: 120, y: 80, scale: 1 });
+  const size = useEditor((s) => s.canvasSize);
+  const view = useEditor((s) => s.view);
+  const [hover, setHover] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [spaceDown, setSpaceDown] = useState(false);
 
   // Taille du canevas = taille du conteneur
   useEffect(() => {
     const el = wrapRef.current!;
-    const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }));
+    const ro = new ResizeObserver(() => setCanvasSize({ w: el.clientWidth, h: el.clientHeight }));
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
@@ -88,7 +89,12 @@ export function Canvas() {
     if (e.target === e.target.getStage()) select([]);
   };
 
-  const onMouseMove = () => {
+  const onMouseMove = (e: Konva.KonvaEventObject<MouseEvent>) => {
+    // Survol : contour bleu sur l'élément sous le pointeur, comme dans Figma
+    let t: Konva.Node | null = e.target;
+    while (t && !t.id().startsWith("n_")) t = t.getParent();
+    const hid = t ? fromCssId(t.id()) : null;
+    if (hid !== hover) setHover(hid);
     if (!draft) return;
     const p = pointer();
     setDraft({ ...draft, x1: p.x, y1: p.y });
@@ -105,7 +111,8 @@ export function Canvas() {
     const clicked = width < 3 && height < 3;
     if (clicked) {
       // Simple clic : taille par défaut
-      const def = { frame: [375, 812], rect: [100, 100], ellipse: [100, 100], text: [160, 24] }[d.type];
+      const defaults: Record<string, [number, number]> = { frame: [375, 812], text: [160, 24] };
+      const def = defaults[d.type] ?? [100, 100];
       width = def[0]!;
       height = def[1]!;
     }
@@ -148,7 +155,7 @@ export function Canvas() {
       return {
         kind: "update" as const,
         id,
-        props: { x: Math.round(g.x()), y: Math.round(g.y()), width, height, rotation: Math.round(g.rotation() * 10) / 10 },
+        props: { ...resizeProps(n, width, height), x: Math.round(g.x()), y: Math.round(g.y()), rotation: Math.round(g.rotation() * 10) / 10 },
       };
     });
     dispatch(ops, "Redimensionner");
@@ -166,6 +173,29 @@ export function Canvas() {
       shape = (
         <Ellipse x={n.width / 2} y={n.height / 2} radiusX={n.width / 2} radiusY={n.height / 2} fill={n.fill ?? undefined} {...stroke} />
       );
+    } else if (n.type === "path" && n.path) {
+      const t = new KonvaLib.Transform(n.path.matrix).decompose();
+      shape = (
+        <Path
+          data={n.path.d}
+          fill={n.fill ?? undefined}
+          fillRule={n.path.fillRule}
+          stroke={n.stroke?.color}
+          strokeWidth={n.stroke?.width}
+          strokeScaleEnabled={false}
+          x={t.x}
+          y={t.y}
+          rotation={t.rotation}
+          scaleX={t.scaleX}
+          scaleY={t.scaleY}
+          skewX={t.skewX}
+          skewY={t.skewY}
+        />
+      );
+      // Zone cliquable = boîte englobante, pour sélectionner facilement les petits vecteurs
+      shape = <>{shape}<Rect width={n.width} height={n.height} fill="transparent" /></>;
+    } else if (n.type === "image" && n.image) {
+      shape = <NodeImage src={n.image.src} width={n.width} height={n.height} radius={n.radius} />;
     } else if (n.type === "text" && n.text) {
       shape = (
         <Text
@@ -219,7 +249,7 @@ export function Canvas() {
     <div
       ref={wrapRef}
       className="canvas"
-      style={{ cursor: panning ? "grab" : drawing ? "crosshair" : "default" }}
+      style={{ cursor: panning ? "grab" : drawing ? "crosshair" : "default", background: doc.background ?? DEFAULT_BACKGROUND }}
     >
       <Stage
         ref={stageRef}
@@ -249,12 +279,29 @@ export function Canvas() {
                 text={n.name}
                 fontSize={12 / view.scale}
                 fontFamily="Inter"
-                fill={selection.includes(id) ? ACCENT : "#8A8A93"}
+                fill={selection.includes(id) ? ACCENT : "#8C8C8C"}
                 listening={false}
               />
             );
           })}
           {doc.roots.map(renderNode)}
+          {hover && !selection.includes(hover) && !draft && doc.nodes[hover] && (() => {
+            const n = doc.nodes[hover]!;
+            const abs = absolutePosition(doc, hover);
+            return (
+              <Rect
+                x={abs.x}
+                y={abs.y}
+                width={n.width}
+                height={n.height}
+                rotation={n.rotation}
+                stroke={ACCENT}
+                strokeWidth={1.5 / view.scale}
+                cornerRadius={n.type === "ellipse" ? undefined : n.radius}
+                listening={false}
+              />
+            );
+          })()}
           {draftRect && (
             <Rect {...draftRect} stroke={ACCENT} strokeWidth={1 / view.scale} dash={[4 / view.scale, 4 / view.scale]} listening={false} />
           )}
@@ -264,14 +311,15 @@ export function Canvas() {
             keepRatio={false}
             borderStroke={ACCENT}
             anchorStroke={ACCENT}
-            anchorSize={8}
+            anchorSize={7}
+            anchorFill="#FFFFFF"
+            anchorCornerRadius={1}
             ignoreStroke
             onTransformEnd={onTransformEnd}
           />
         </Layer>
       </Stage>
       <TextEditor view={view} />
-      <div className="zoom">{Math.round(view.scale * 100)} %</div>
     </div>
   );
 }
@@ -358,3 +406,36 @@ export const isTyping = (e: KeyboardEvent) => {
   const el = e.target as HTMLElement;
   return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable;
 };
+
+/** Images : chargées une fois puis mises en cache (une même source peut servir plusieurs nœuds). */
+const imageCache = new Map<string, HTMLImageElement>();
+function NodeImage({ src, width, height, radius }: { src: string; width: number; height: number; radius: number }) {
+  const [img, setImg] = useState<HTMLImageElement | null>(() => {
+    const cached = imageCache.get(src);
+    return cached?.complete ? cached : null;
+  });
+  useEffect(() => {
+    let el = imageCache.get(src);
+    if (!el) {
+      el = new window.Image();
+      el.src = src;
+      imageCache.set(src, el);
+    }
+    if (el.complete) setImg(el);
+    else el.addEventListener("load", () => setImg(el!), { once: true });
+  }, [src]);
+  if (!img) return <Rect width={width} height={height} fill="#E3E3E3" cornerRadius={radius} />;
+  // Remplissage « cover », comme object-fit: cover dans l'export
+  const scale = Math.max(width / img.naturalWidth, height / img.naturalHeight);
+  const cw = width / scale;
+  const ch = height / scale;
+  return (
+    <KImage
+      image={img}
+      width={width}
+      height={height}
+      cornerRadius={radius}
+      crop={{ x: (img.naturalWidth - cw) / 2, y: (img.naturalHeight - ch) / 2, width: cw, height: ch }}
+    />
+  );
+}

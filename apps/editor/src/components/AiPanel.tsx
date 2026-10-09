@@ -40,8 +40,8 @@ export function AiPanel() {
   };
 
   return (
-    <div className="panel ai">
-      <div className="panel-title">IA · Design</div>
+    <div className="ai-panel">
+      <div className="side-section-title">Designer avec l'IA</div>
 
       <div
         className={"dropzone" + (image ? " has-image" : "")}
@@ -87,7 +87,7 @@ export function AiPanel() {
         onChange={(e) => setPrompt(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && (e.metaKey || e.ctrlKey) && run()}
       />
-      <button className="primary" disabled={busy || (!image && !prompt.trim())} onClick={run}>
+      <button className="btn primary-btn ai-run" disabled={busy || (!image && !prompt.trim())} onClick={run}>
         {busy ? "L'IA dessine…" : image ? "Designer cette capture" : "Générer"}
       </button>
 

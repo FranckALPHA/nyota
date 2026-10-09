@@ -1,14 +1,19 @@
 // Toute modification du document passe par une opération.
 // Humain, IA intégrée, IA externe via MCP : même chemin, même historique, même synchro.
 
-import { type DesignDocument, type DesignNode, type NodeProps, siblingsOf, subtree } from "./model.js";
+import { DEFAULT_BACKGROUND, type DesignDocument, type DesignNode, type NodeProps, siblingsOf, subtree } from "./model.js";
 
 export type Op =
   | { kind: "create"; node: DesignNode; index?: number }
   | { kind: "update"; id: string; props: NodeProps }
   | { kind: "delete"; id: string }
   | { kind: "move"; id: string; parentId: string | null; index?: number }
-  | { kind: "rename-doc"; name: string };
+  | { kind: "set-doc"; props: DocProps };
+
+export interface DocProps {
+  name?: string;
+  background?: string;
+}
 
 export type Author = "human" | "ai" | "mcp";
 
@@ -75,10 +80,11 @@ export function applyOp(doc: DesignDocument, op: Op): Op[] {
       insertAt(siblingsOf(doc, op.parentId), op.id, op.index);
       return [{ kind: "move", id: op.id, parentId: oldParent, index: oldIndex }];
     }
-    case "rename-doc": {
-      const before = doc.name;
-      doc.name = op.name;
-      return [{ kind: "rename-doc", name: before }];
+    case "set-doc": {
+      const before: DocProps = {};
+      if (op.props.name !== undefined) (before.name = doc.name), (doc.name = op.props.name);
+      if (op.props.background !== undefined) (before.background = doc.background ?? DEFAULT_BACKGROUND), (doc.background = op.props.background);
+      return [{ kind: "set-doc", props: before }];
     }
   }
 }

@@ -54,9 +54,21 @@ const props = {
   locked: z.boolean().optional(),
   clip: z.boolean().optional().describe("Une frame rogne-t-elle son contenu"),
   text: textStyle.optional().describe("Uniquement pour les nœuds de type text"),
+  path: z
+    .object({
+      d: z.string().describe("Données de chemin SVG"),
+      fillRule: z.enum(["nonzero", "evenodd"]).default("nonzero"),
+      matrix: z
+        .tuple([z.number(), z.number(), z.number(), z.number(), z.number(), z.number()])
+        .default([1, 0, 0, 1, 0, 0])
+        .describe("Matrice SVG (a b c d e f) qui place le chemin dans le repère du nœud"),
+    })
+    .optional()
+    .describe("Uniquement pour les nœuds de type path (icônes, formes libres)"),
+  image: z.object({ src: z.string().describe("URL ou data URL") }).optional().describe("Uniquement pour les nœuds de type image"),
 };
 
-const nodeType = z.enum(["frame", "rect", "ellipse", "text"]);
+const nodeType = z.enum(["frame", "rect", "ellipse", "text", "path", "image"]);
 
 function defineTool<S extends z.ZodObject>(t: DesignTool<S>): DesignTool<S> {
   return t;
@@ -72,6 +84,9 @@ function compact(n: DesignNode, doc: DesignDocument): Record<string, unknown> {
   if (n.opacity !== 1) out.opacity = n.opacity;
   if (!n.visible) out.visible = false;
   if (n.text) out.text = n.text;
+  // On résume les données volumineuses pour ne pas saturer le contexte de l'IA
+  if (n.path) out.path = { d: n.path.d.length > 160 ? n.path.d.slice(0, 160) + `… (${n.path.d.length} car.)` : n.path.d };
+  if (n.image) out.image = { src: n.image.src.startsWith("data:") ? `(image intégrée, ${Math.round(n.image.src.length / 1024)} Ko)` : n.image.src };
   if (n.children.length) out.children = n.children.map((c) => compact(doc.nodes[c]!, doc));
   return out;
 }

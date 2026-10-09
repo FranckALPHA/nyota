@@ -3,6 +3,7 @@
 // (IA intégrée, IA via MCP, autres onglets) arrivent par WebSocket.
 
 import { useSyncExternalStore } from "react";
+import { importSvg } from "./svgImport";
 import {
   type AiEvent, type ClientMessage, type DesignDocument, type Op, type ServerMessage,
   applyOps, createDocument, newId,
@@ -15,6 +16,10 @@ export interface AiImage {
   originalWidth: number;
   originalHeight: number;
 }
+
+export interface View { x: number; y: number; scale: number }
+export type LeftTab = "file" | "ai";
+export type RightTab = "design" | "code";
 
 export type Tool = "select" | "frame" | "rect" | "ellipse" | "text" | "hand";
 
@@ -29,6 +34,11 @@ export interface EditorState {
   aiImage: AiImage | null;
   lastError: string | null;
   version: number; // incrémenté à chaque changement du document
+  view: View;
+  canvasSize: { w: number; h: number };
+  leftTab: LeftTab;
+  rightTab: RightTab;
+  presence: { editors: number; mcpLastSeen: number | null };
 }
 
 const ORIGIN = newId();
@@ -44,6 +54,11 @@ let state: EditorState = {
   aiImage: null,
   lastError: null,
   version: 0,
+  view: { x: 120, y: 80, scale: 1 },
+  canvasSize: { w: 800, h: 600 },
+  leftTab: "file",
+  rightTab: "design",
+  presence: { editors: 1, mcpLastSeen: null },
 };
 
 const listeners = new Set<() => void>();
@@ -87,9 +102,13 @@ export function connect() {
 
 function receive(msg: ServerMessage) {
   switch (msg.type) {
-    case "doc":
+    case "doc": {
+      const first = state.version === 0;
       set({ doc: msg.doc, version: state.version + 1, selection: state.selection.filter((id) => msg.doc.nodes[id]) });
+      // À l'ouverture, on cadre tout le document (après que le canevas a pris sa taille)
+      if (first && msg.doc.roots.length) requestAnimationFrame(() => zoomToFit(msg.doc.roots));
       break;
+    }
     case "ops": {
       if (msg.origin === ORIGIN) return; // déjà appliqué localement
       const doc = structuredClone(state.doc);
@@ -107,6 +126,9 @@ function receive(msg: ServerMessage) {
       break;
     case "ai":
       set({ aiLog: [...state.aiLog, msg.event].slice(-300) });
+      break;
+    case "presence":
+      set({ presence: { editors: msg.editors, mcpLastSeen: msg.mcpLastSeen } });
       break;
   }
 }
@@ -135,6 +157,43 @@ export function select(ids: string[]) {
 }
 
 export const setTool = (tool: Tool) => set({ tool });
+export const setLeftTab = (leftTab: LeftTab) => set({ leftTab });
+export const setRightTab = (rightTab: RightTab) => set({ rightTab });
+export const setCanvasSize = (canvasSize: { w: number; h: number }) => set({ canvasSize });
+export const setView = (view: View | ((v: View) => View)) =>
+  set({ view: typeof view === "function" ? view(state.view) : view });
+
+const clampScale = (s: number) => Math.min(32, Math.max(0.05, s));
+
+/** Zoom autour du centre du canevas. */
+export function zoomTo(scale: number) {
+  const { view, canvasSize } = state;
+  const next = clampScale(scale);
+  const cx = canvasSize.w / 2;
+  const cy = canvasSize.h / 2;
+  const wx = (cx - view.x) / view.scale;
+  const wy = (cy - view.y) / view.scale;
+  setView({ scale: next, x: cx - wx * next, y: cy - wy * next });
+}
+export const zoomBy = (factor: number) => zoomTo(state.view.scale * factor);
+
+/** Cadre la sélection (ou tout le document) dans le canevas. */
+export function zoomToFit(ids = state.selection.length ? state.selection : state.doc.roots) {
+  const { doc, canvasSize } = state;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const id of ids) {
+    const n = doc.nodes[id];
+    if (!n) continue;
+    let ax = 0, ay = 0;
+    for (let cur: typeof n | undefined = n; cur; cur = cur.parentId ? doc.nodes[cur.parentId] : undefined) (ax += cur.x), (ay += cur.y);
+    x0 = Math.min(x0, ax); y0 = Math.min(y0, ay);
+    x1 = Math.max(x1, ax + n.width); y1 = Math.max(y1, ay + n.height);
+  }
+  if (!Number.isFinite(x0)) return setView({ x: 120, y: 80, scale: 1 });
+  const pad = 64;
+  const scale = clampScale(Math.min((canvasSize.w - pad * 2) / (x1 - x0 || 1), (canvasSize.h - pad * 2) / (y1 - y0 || 1), 2));
+  setView({ scale, x: (canvasSize.w - (x1 - x0) * scale) / 2 - x0 * scale, y: (canvasSize.h - (y1 - y0) * scale) / 2 - y0 * scale });
+}
 export const setEditingText = (id: string | null) => set({ editingTextId: id });
 
 export async function askAi(body: unknown) {
@@ -170,8 +229,38 @@ export async function attachImage(file: Blob) {
     canvas.width = w;
     canvas.height = h;
     canvas.getContext("2d")!.drawImage(img, 0, 0, w, h);
+    set({ leftTab: "ai" });
     setAiImage({ dataUrl: canvas.toDataURL("image/png"), width: w, height: h, originalWidth: img.naturalWidth, originalHeight: img.naturalHeight });
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+/** Importe un SVG comme maquette éditable, posée à droite de ce qui existe déjà. */
+export function importSvgText(source: string, name = "Import SVG") {
+  const { doc } = state;
+  let maxX = -100;
+  for (const id of doc.roots) {
+    const n = doc.nodes[id]!;
+    maxX = Math.max(maxX, n.x + n.width);
+  }
+  try {
+    const t0 = performance.now();
+    const { ops, rootId, stats } = importSvg(source, name, { x: Math.round(maxX + 100), y: 0 });
+    dispatch(ops, `Importer ${name}`);
+    select([rootId]);
+    set({ leftTab: "file" });
+    zoomToFit([rootId]);
+    const skipped = Object.entries(stats.skipped).map(([k, v]) => `${v} ${k}`).join(", ");
+    console.info(`SVG importé : ${stats.nodes} calques en ${Math.round(performance.now() - t0)} ms` + (skipped ? ` (ignorés : ${skipped})` : ""));
+    return stats;
+  } catch (err) {
+    set({ lastError: err instanceof Error ? err.message : String(err) });
+    setTimeout(() => set({ lastError: null }), 4000);
+    return null;
+  }
+}
+
+export async function importSvgFile(file: File) {
+  return importSvgText(await file.text(), file.name.replace(/\.svg$/i, ""));
 }

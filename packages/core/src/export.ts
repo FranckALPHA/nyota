@@ -15,8 +15,8 @@ export function exportHtml(root: NodeTree): { html: string; css: string } {
       `width: ${px(n.width)}`,
       `height: ${px(n.height)}`,
     ];
-    if (n.fill && n.type !== "text") s.push(`background: ${n.fill}`);
-    if (n.stroke) s.push(`border: ${px(n.stroke.width)} solid ${n.stroke.color}`, "box-sizing: border-box");
+    if (n.fill && n.type !== "text" && n.type !== "path") s.push(`background: ${n.fill}`);
+    if (n.stroke && n.type !== "path") s.push(`border: ${px(n.stroke.width)} solid ${n.stroke.color}`, "box-sizing: border-box");
     if (n.type === "ellipse") s.push("border-radius: 50%");
     else if (n.radius) s.push(`border-radius: ${px(n.radius)}`);
     if (n.opacity !== 1) s.push(`opacity: ${n.opacity}`);
@@ -36,6 +36,11 @@ export function exportHtml(root: NodeTree): { html: string; css: string } {
     rules.push(`.${c} {\n  ${s.join(";\n  ")};\n}`);
     const pad = "  ".repeat(depth);
     if (n.type === "text") return `${pad}<p class="${c}">${escape(n.text!.content)}</p>`;
+    if (n.type === "image" && n.image) return `${pad}<img class="${c}" src="${n.image.src}" alt="${escape(n.name)}" style="object-fit: cover">`;
+    if (n.type === "path" && n.path) {
+      const m = n.path.matrix.join(" ");
+      return `${pad}<svg class="${c}" viewBox="0 0 ${n.width || 1} ${n.height || 1}" style="overflow: visible; display: block"><path d="${n.path.d}" transform="matrix(${m})" fill="${n.fill ?? "none"}"${n.path.fillRule === "evenodd" ? ' fill-rule="evenodd"' : ""}${n.stroke ? ` stroke="${n.stroke.color}" stroke-width="${n.stroke.width}"` : ""} /></svg>`;
+    }
     const inner = n.children.map((ch) => render(ch, false, depth + 1)).filter(Boolean).join("\n");
     return inner ? `${pad}<div class="${c}">\n${inner}\n${pad}</div>` : `${pad}<div class="${c}"></div>`;
   };

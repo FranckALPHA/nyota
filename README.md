@@ -7,6 +7,7 @@ L'humain et l'IA travaillent **dans les deux sens, sur le même document, avec l
 
 - **Capture d'écran → design** : colle une capture (Ctrl+V) et l'IA la reconstruit en calques éditables.
 - **Texte → design** : « page de paiement Mobile Money, style moderne ».
+- **SVG → maquette** : importe un SVG (export Figma, Illustrator, Inkscape…) ; il devient une maquette éditable, calques et noms compris.
 - **Design → React** : export en `.zip` d'un projet Vite, **un composant par élément** (voir plus bas).
 - **Design → HTML/CSS** : export rapide d'une frame.
 - **Serveur MCP intégré** : Claude Code, Claude Desktop, Cursor ou toute IA compatible MCP peut lire et dessiner dans ton document, en direct.
@@ -16,7 +17,7 @@ L'humain et l'IA travaillent **dans les deux sens, sur le même document, avec l
 ```
 packages/core     Modèle de document, opérations (avec annulation), OUTILS DE DESIGN, export HTML/CSS
 apps/server       Document de référence + WebSocket + serveur MCP (/mcp) + agent IA intégré (/api/ai/design)
-apps/editor       Éditeur React + Konva (canevas, calques, propriétés, panneau IA)
+apps/editor       Éditeur React + Konva (canevas, calques, propriétés, onglet Code, panneau IA, import SVG)
 ```
 
 Le principe clé : **une seule définition des outils** (`packages/core/src/tools.ts`), utilisée par :
@@ -50,6 +51,27 @@ STRUCTURE.md      ← l'arbre complet : qui contient qui
 On ne cherche pas à écrire une page « parfaite » d'un coup : on obtient des briques fidèles et indépendantes,
 qu'on peut ensuite réorganiser (flexbox, données dynamiques…). Les IA y ont accès aussi via l'outil `export_react`.
 
+## Import SVG
+
+Trois façons : le bouton d'import du panneau Calques, glisser un `.svg` sur le canevas, ou coller du code SVG
+(« Copier en SVG » dans Figma). Le navigateur calcule la géométrie exacte de chaque élément, puis :
+
+| SVG | Devient dans Nyota |
+|---|---|
+| `<g>` | frame (sans fond) ; avec un masque ou un `clip-path`, frame qui rogne (ex. avatar rond) |
+| `<rect>` | rectangle avec radius, ou **image** s'il est rempli par un motif d'image |
+| `<circle>`, `<ellipse>` | ellipse |
+| `<path>`, `<polygon>`, `<line>`… | **vecteur** (le tracé d'origine est conservé) |
+| `<image>` | **image** |
+| `<text>` | texte |
+
+Les noms de calques (attribut `id`, comme dans les exports Figma) sont conservés et deviennent les noms des
+composants React. Testé sur un tableau de bord exporté de Figma (1440×900) : 188 calques importés en ~0,1 s,
+et l'export React diffère du SVG d'origine sur **0,73 % des pixels** (lissage des contours du texte).
+
+Limites actuelles : les dégradés sont remplacés par leur première couleur, les filtres (ombres, flous) sont ignorés,
+et un masque en forme libre est approché par sa boîte englobante.
+
 ## Démarrer
 
 ```bash
@@ -82,6 +104,8 @@ Puis par exemple : *« Dans Nyota, crée un écran de connexion pour une app de 
 | Flèches (+Maj) | Décaler de 1 px (10 px) |
 | Double-clic sur un texte | Éditer |
 | Ctrl+V avec une image | Envoyer la capture à l'IA |
+| Ctrl+V avec du code SVG | Importer comme maquette |
+| Maj+1 / Maj+2 / Maj+0 | Tout afficher / Cadrer la sélection / Zoom 100 % |
 
 ## Variables d'environnement
 

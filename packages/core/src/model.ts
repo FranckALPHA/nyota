@@ -1,7 +1,7 @@
 // Modèle de document Nyota : un dictionnaire plat de nœuds + l'ordre des enfants.
 // Plat = facile à modifier par opérations, facile à synchroniser, facile à lire pour une IA.
 
-export type NodeType = "frame" | "rect" | "ellipse" | "text";
+export type NodeType = "frame" | "rect" | "ellipse" | "text" | "path" | "image";
 
 export interface Stroke {
   color: string;
@@ -16,6 +16,17 @@ export interface TextStyle {
   color: string;
   align: "left" | "center" | "right";
   lineHeight: number;
+}
+
+/** Vecteur : données SVG d'origine + matrice qui les ramène dans le repère local du nœud. */
+export interface PathData {
+  d: string;
+  fillRule: "nonzero" | "evenodd";
+  matrix: [number, number, number, number, number, number]; // a b c d e f, comme en SVG
+}
+
+export interface ImageData {
+  src: string; // URL ou data URL
 }
 
 export interface DesignNode {
@@ -38,21 +49,26 @@ export interface DesignNode {
   locked: boolean;
   clip: boolean; // les frames rognent leur contenu
   text: TextStyle | null;
+  path?: PathData | null;
+  image?: ImageData | null;
 }
 
 export interface DesignDocument {
   id: string;
   name: string;
+  background?: string; // couleur du canevas (« page »)
   nodes: Record<string, DesignNode>;
   roots: string[]; // ordre d'empilement sur le canevas (dernier = au-dessus)
 }
+
+export const DEFAULT_BACKGROUND = "#F5F5F5";
 
 export type NodeProps = Partial<Omit<DesignNode, "id" | "type" | "parentId" | "children" | "text">> & {
   text?: Partial<TextStyle>;
 };
 
 export function createDocument(name = "Sans titre"): DesignDocument {
-  return { id: newId(), name, nodes: {}, roots: [] };
+  return { id: newId(), name, background: DEFAULT_BACKGROUND, nodes: {}, roots: [] };
 }
 
 let counter = 0;
@@ -84,7 +100,7 @@ export function makeNode(type: NodeType, props: NodeProps = {}, id = newId()): D
     width: type === "text" ? 120 : 100,
     height: type === "text" ? 24 : 100,
     rotation: 0,
-    fill: type === "frame" ? "#FFFFFF" : type === "text" ? null : "#D9D9D9",
+    fill: type === "frame" ? "#FFFFFF" : type === "text" || type === "image" ? null : type === "path" ? "#000000" : "#D9D9D9",
     stroke: null,
     radius: 0,
     opacity: 1,
@@ -92,12 +108,14 @@ export function makeNode(type: NodeType, props: NodeProps = {}, id = newId()): D
     locked: false,
     clip: type === "frame",
     text: type === "text" ? { ...DEFAULT_TEXT, ...text } : null,
+    path: null,
+    image: null,
     ...rest,
   };
 }
 
 function defaultName(type: NodeType): string {
-  return { frame: "Frame", rect: "Rectangle", ellipse: "Ellipse", text: "Texte" }[type];
+  return { frame: "Frame", rect: "Rectangle", ellipse: "Ellipse", text: "Texte", path: "Vecteur", image: "Image" }[type];
 }
 
 export function siblingsOf(doc: DesignDocument, parentId: string | null): string[] {
@@ -136,4 +154,16 @@ export interface NodeTree extends Omit<DesignNode, "children" | "parentId"> {
 export function toTree(doc: DesignDocument, id: string): NodeTree {
   const { children, parentId: _p, ...n } = doc.nodes[id]!;
   return { ...n, children: children.map((c) => toTree(doc, c)) };
+}
+
+/** Propriétés pour redimensionner un nœud ; un vecteur voit aussi son dessin étiré. */
+export function resizeProps(node: DesignNode, width: number, height: number): NodeProps {
+  const props: NodeProps = { width, height };
+  if (node.path && node.width > 0 && node.height > 0) {
+    const sx = width / node.width;
+    const sy = height / node.height;
+    const [a, b, c, d, e, f] = node.path.matrix;
+    props.path = { ...node.path, matrix: [a * sx, b * sy, c * sx, d * sy, e * sx, f * sy] };
+  }
+  return props;
 }

@@ -29,8 +29,19 @@ app.post("/api/ai/design", async (req, res) => {
   }
 });
 
+// Présence : nombre d'éditeurs ouverts et dernière activité MCP, affichés dans l'éditeur.
+let editors = 0;
+let mcpLastSeen: number | null = null;
+let presenceTimer: NodeJS.Timeout | undefined;
+const broadcastPresence = () => {
+  clearTimeout(presenceTimer);
+  presenceTimer = setTimeout(() => store.broadcast({ type: "presence", editors, mcpLastSeen }), 200);
+};
+
 // MCP en HTTP « streamable », sans état : un serveur + un transport par requête.
 app.post("/mcp", async (req, res) => {
+  mcpLastSeen = Date.now();
+  broadcastPresence();
   const server = createMcpServer(store);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   res.on("close", () => {
@@ -52,6 +63,8 @@ wss.on("connection", (ws: WebSocket) => {
   const send = (msg: ServerMessage) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(msg));
   send({ type: "doc", doc: store.doc });
   const unsubscribe = store.subscribe(send);
+  editors++;
+  broadcastPresence();
 
   ws.on("message", (raw) => {
     let msg: ClientMessage;
@@ -71,7 +84,11 @@ wss.on("connection", (ws: WebSocket) => {
       send({ type: "doc", doc: store.doc });
     }
   });
-  ws.on("close", unsubscribe);
+  ws.on("close", () => {
+    unsubscribe();
+    editors--;
+    broadcastPresence();
+  });
 });
 
 httpServer.listen(PORT, () => {

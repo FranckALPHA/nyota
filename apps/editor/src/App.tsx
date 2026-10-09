@@ -1,36 +1,34 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { type Op, makeNode, newId, subtree } from "@nyota/core";
 import { Canvas, isTyping } from "./components/Canvas";
-import { Layers } from "./components/Layers";
-import { Properties } from "./components/Properties";
+import { FilePanel } from "./components/Layers";
 import { AiPanel } from "./components/AiPanel";
-import { type Tool, attachImage, dispatch, getState, redo, select, setTool, undo, useEditor } from "./store";
+import { Rail } from "./components/Rail";
+import { RightPanel } from "./components/RightPanel";
+import { TOOLS, Toolbar } from "./components/Toolbar";
+import { attachImage, dispatch, importSvgFile, importSvgText, getState, redo, select, setTool, undo, useEditor, zoomBy, zoomTo, zoomToFit } from "./store";
 
-const TOOLS: { id: Tool; key: string; icon: string; label: string }[] = [
-  { id: "select", key: "v", icon: "↖", label: "Sélection (V)" },
-  { id: "frame", key: "f", icon: "#", label: "Frame (F)" },
-  { id: "rect", key: "r", icon: "▢", label: "Rectangle (R)" },
-  { id: "ellipse", key: "o", icon: "◯", label: "Ellipse (O)" },
-  { id: "text", key: "t", icon: "T", label: "Texte (T)" },
-  { id: "hand", key: "h", icon: "✋", label: "Main (H / Espace)" },
-];
-
+// Disposition inspirée des outils de design pro :
+// barre d'icônes | panneau Fichier/IA | canevas + barre d'outils flottante | panneau Design/Code
 export function App() {
-  const tool = useEditor((s) => s.tool);
-  const connected = useEditor((s) => s.connected);
-  const docName = useEditor((s) => s.doc.name);
+  const leftTab = useEditor((s) => s.leftTab);
   const error = useEditor((s) => s.lastError);
-  const [showMcp, setShowMcp] = useState(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (isTyping(e)) return;
       const mod = e.metaKey || e.ctrlKey;
+      const k = e.key.toLowerCase();
       const { selection, doc } = getState();
-      if (mod && e.key.toLowerCase() === "z") return e.preventDefault(), e.shiftKey ? redo() : undo();
-      if (mod && e.key.toLowerCase() === "y") return e.preventDefault(), redo();
-      if (mod && e.key.toLowerCase() === "d") return e.preventDefault(), duplicate(selection);
-      if (mod && e.key.toLowerCase() === "a") return e.preventDefault(), select(doc.roots);
+      if (mod && k === "z") return e.preventDefault(), e.shiftKey ? redo() : undo();
+      if (mod && k === "y") return e.preventDefault(), redo();
+      if (mod && k === "d") return e.preventDefault(), duplicate(selection);
+      if (mod && k === "a") return e.preventDefault(), select(doc.roots);
+      if (mod && (e.key === "=" || e.key === "+")) return e.preventDefault(), zoomBy(1.25);
+      if (mod && e.key === "-") return e.preventDefault(), zoomBy(0.8);
+      if (e.shiftKey && e.code === "Digit1") return zoomToFit(doc.roots);
+      if (e.shiftKey && e.code === "Digit2") return zoomToFit();
+      if (e.shiftKey && e.code === "Digit0") return zoomTo(1);
       if (e.key === "Delete" || e.key === "Backspace") {
         const top = selection.filter((id) => !selection.some((o) => o !== id && subtree(doc, o).includes(id)));
         return dispatch(top.map((id) => ({ kind: "delete", id })), "Supprimer");
@@ -43,13 +41,20 @@ export function App() {
         const dy = e.key === "ArrowUp" ? -d : e.key === "ArrowDown" ? d : 0;
         return dispatch(selection.map((id) => ({ kind: "update", id, props: { x: doc.nodes[id]!.x + dx, y: doc.nodes[id]!.y + dy } })), "Décaler");
       }
-      if (!mod) {
-        const t = TOOLS.find((t) => t.key === e.key.toLowerCase());
+      if (!mod && !e.shiftKey) {
+        const t = TOOLS.find((t) => t.key === k);
         if (t) setTool(t.id);
       }
     };
     // Coller une image n'importe où = l'envoyer à l'IA
     const onPaste = (e: ClipboardEvent) => {
+      // Code SVG collé (ex. « Copier en SVG » depuis Figma) → maquette éditable
+      const textData = e.clipboardData?.getData("text/plain")?.trim();
+      if (textData && /^(<\?xml[^>]*>\s*)?<svg[\s>]/i.test(textData)) {
+        e.preventDefault();
+        importSvgText(textData, "SVG collé");
+        return;
+      }
       const item = [...(e.clipboardData?.items ?? [])].find((i) => i.type.startsWith("image/"));
       const file = item?.getAsFile();
       if (file) {
@@ -64,31 +69,24 @@ export function App() {
 
   return (
     <div className="app">
-      <header className="topbar">
-        <div className="brand">✦ Nyota</div>
-        <div className="tools">
-          {TOOLS.map((t) => (
-            <button key={t.id} title={t.label} className={tool === t.id ? "active" : ""} onClick={() => setTool(t.id)}>
-              {t.icon}
-            </button>
-          ))}
-        </div>
-        <div className="doc-name">{docName}</div>
-        <button className="ghost" onClick={() => setShowMcp(true)}>Connecter une IA (MCP)</button>
-        <span className={"status " + (connected ? "on" : "off")} title={connected ? "Connecté au serveur" : "Hors ligne"} />
-      </header>
-      <aside className="left">
-        <Layers />
-      </aside>
-      <main className="center">
+      <Rail />
+      <aside className="left">{leftTab === "file" ? <FilePanel /> : <AiPanel />}</aside>
+      <main
+        className="center"
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => {
+          const file = e.dataTransfer.files[0];
+          if (!file) return;
+          e.preventDefault();
+          if (file.type === "image/svg+xml" || file.name.toLowerCase().endsWith(".svg")) void importSvgFile(file);
+          else if (file.type.startsWith("image/")) void attachImage(file);
+        }}
+      >
         <Canvas />
+        <Toolbar />
         {error && <div className="toast">{error}</div>}
       </main>
-      <aside className="right">
-        <Properties />
-        <AiPanel />
-      </aside>
-      {showMcp && <McpModal onClose={() => setShowMcp(false)} />}
+      <RightPanel />
     </div>
   );
 }
@@ -110,24 +108,4 @@ function duplicate(ids: string[]) {
   for (const id of ids) if (doc.nodes[id]) newIds.push(copy(id, doc.nodes[id]!.parentId, 16));
   dispatch(ops, "Dupliquer");
   select(newIds);
-}
-
-function McpModal({ onClose }: { onClose: () => void }) {
-  const url = `${location.origin}/mcp`;
-  return (
-    <div className="modal-bg" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <b>Connecter une IA à Nyota</b>
-          <button className="ghost" onClick={onClose}>Fermer</button>
-        </div>
-        <p>Nyota expose un serveur MCP. Toute IA compatible peut lire et dessiner dans ce document, en direct.</p>
-        <p><b>Claude Code</b></p>
-        <pre>claude mcp add --transport http nyota {url}</pre>
-        <p><b>Autres clients MCP (Cursor, Claude Desktop…)</b></p>
-        <pre>{JSON.stringify({ mcpServers: { nyota: { type: "http", url } } }, null, 2)}</pre>
-        <p className="hint">Outils exposés : get_document, get_selection, create_nodes, update_nodes, delete_nodes, move_node, export_code, export_react.</p>
-      </div>
-    </div>
-  );
 }

@@ -1,67 +1,106 @@
 import { useState } from "react";
-import { zipSync, strToU8 } from "fflate";
-import { type DesignDocument, type DesignNode, type NodeProps, exportHtml, exportReact, toTree } from "@nyota/core";
-import { dispatch, useEditor } from "../store";
+import { DEFAULT_BACKGROUND, type DesignNode, type NodeProps, exportHtml, resizeProps, toTree } from "@nyota/core";
+import { dispatch, setRightTab, useEditor } from "../store";
+import { downloadReactZip } from "../exporting";
+import { IconCode, IconDownload, IconEye, IconEyeOff, IconMinus, IconPlug, IconPlus } from "./icons";
+import { Modal } from "./Modal";
 
-export function Properties() {
+/** Onglet « Design » du panneau de droite : propriétés de la sélection, ou de la page. */
+export function DesignTab() {
   const doc = useEditor((s) => s.doc);
   const selection = useEditor((s) => s.selection);
-  const [code, setCode] = useState<{ html: string; css: string } | null>(null);
   const node = selection.length === 1 ? doc.nodes[selection[0]!] : undefined;
-
-  if (!node) {
+  if (selection.length > 1) {
     return (
-      <div className="panel props">
-        <div className="panel-title">Propriétés</div>
-        <p className="hint">{selection.length > 1 ? `${selection.length} éléments sélectionnés` : "Aucune sélection"}</p>
-      </div>
+      <Section title={`${selection.length} éléments sélectionnés`}>
+        <p className="hint">Sélectionne un seul élément pour modifier ses propriétés.</p>
+      </Section>
     );
   }
+  return node ? <NodeProperties node={node} /> : <PageProperties />;
+}
 
+// ---------- Aucune sélection : la page ----------
+
+function PageProperties() {
+  const background = useEditor((s) => s.doc.background ?? DEFAULT_BACKGROUND);
+  const presence = useEditor((s) => s.presence);
+  const [mcpOpen, setMcpOpen] = useState(false);
+  const mcpActive = presence.mcpLastSeen !== null && Date.now() - presence.mcpLastSeen < 10 * 60_000;
+  return (
+    <>
+      <Section title="Page">
+        <ColorRow value={background} onChange={(v) => v && dispatch([{ kind: "set-doc", props: { background: v } }], "Couleur de page")} />
+      </Section>
+      <Section title="Exporter">
+        <p className="hint">Sélectionne une frame pour l'exporter en React (un composant par élément) ou en HTML/CSS.</p>
+      </Section>
+      <Section
+        title={
+          <>
+            MCP <span className={"pill" + (mcpActive ? " ok" : "")}>{mcpActive ? "IA connectée" : "en attente"}</span>
+          </>
+        }
+        action={<button className="icon-btn" title="Connecter une IA" onClick={() => setMcpOpen(true)}><IconPlug size={14} /></button>}
+      >
+        <div className="kv"><span>Éditeurs ouverts</span><b>{presence.editors}</b></div>
+        <div className="kv"><span>Dernier appel d'une IA</span><b>{presence.mcpLastSeen ? since(presence.mcpLastSeen) : "—"}</b></div>
+      </Section>
+      {mcpOpen && <McpModal onClose={() => setMcpOpen(false)} />}
+    </>
+  );
+}
+
+const since = (t: number) => {
+  const s = Math.round((Date.now() - t) / 1000);
+  return s < 60 ? "à l'instant" : s < 3600 ? `il y a ${Math.round(s / 60)} min` : `il y a ${Math.round(s / 3600)} h`;
+};
+
+export function McpModal({ onClose }: { onClose: () => void }) {
+  const url = `${location.origin}/mcp`;
+  return (
+    <Modal title="Connecter une IA à Nyota (MCP)" onClose={onClose}>
+      <p>Nyota expose un serveur MCP : toute IA compatible peut lire et dessiner dans ce document, en direct.</p>
+      <p><b>Claude Code</b></p>
+      <pre>claude mcp add --transport http nyota {url}</pre>
+      <p><b>Autres clients MCP (Cursor, Claude Desktop…)</b></p>
+      <pre>{JSON.stringify({ mcpServers: { nyota: { type: "http", url } } }, null, 2)}</pre>
+      <p className="hint">
+        Outils exposés : get_document, get_selection, create_nodes, update_nodes, delete_nodes, move_node, export_code, export_react.
+      </p>
+    </Modal>
+  );
+}
+
+// ---------- Un élément sélectionné ----------
+
+const KIND: Record<DesignNode["type"], string> = { frame: "Frame", rect: "Rectangle", ellipse: "Ellipse", text: "Texte", path: "Vecteur", image: "Image" };
+const WEIGHTS: Record<number, string> = { 100: "Thin", 200: "ExtraLight", 300: "Light", 400: "Regular", 500: "Medium", 600: "Semi Bold", 700: "Bold", 800: "Extra Bold", 900: "Black" };
+
+function NodeProperties({ node }: { node: DesignNode }) {
+  const doc = useEditor((s) => s.doc);
+  const [html, setHtml] = useState<{ html: string; css: string } | null>(null);
   const set = (props: NodeProps) => dispatch([{ kind: "update", id: node.id, props }]);
 
   return (
-    <div className="panel props">
-      <div className="panel-title">{label(node)}</div>
+    <>
+      <div className="node-head">
+        <span className="node-kind">{KIND[node.type]}</span>
+        <span className="node-name">{node.name}</span>
+      </div>
 
-      <Section title="Position et taille">
+      <Section title="Position">
         <div className="grid2">
           <Num label="X" value={node.x} onChange={(x) => set({ x })} />
           <Num label="Y" value={node.y} onChange={(y) => set({ y })} />
-          <Num label="L" value={node.width} min={1} onChange={(width) => set({ width })} />
-          <Num label="H" value={node.height} min={1} onChange={(height) => set({ height })} />
-          <Num label="↻" value={node.rotation} onChange={(rotation) => set({ rotation })} />
-          {node.type !== "ellipse" && node.type !== "text" && (
-            <Num label="◜" value={node.radius} min={0} onChange={(radius) => set({ radius })} />
-          )}
+          <Num label="↻" value={node.rotation} suffix="°" onChange={(rotation) => set({ rotation })} />
         </div>
       </Section>
 
-      {node.type !== "text" && (
-        <Section title="Remplissage">
-          <ColorRow value={node.fill} onChange={(fill) => set({ fill })} allowNone />
-        </Section>
-      )}
-
-      <Section title="Contour">
-        {node.stroke ? (
-          <div className="row">
-            <ColorRow value={node.stroke.color} onChange={(color) => set({ stroke: { ...node.stroke!, color: color ?? "#000000" } })} />
-            <Num label="ép." value={node.stroke.width} min={0} onChange={(width) => set({ stroke: { ...node.stroke!, width } })} />
-            <button className="ghost" onClick={() => set({ stroke: null })}>−</button>
-          </div>
-        ) : (
-          <button className="ghost" onClick={() => set({ stroke: { color: "#000000", width: 1 } })}>+ Ajouter un contour</button>
-        )}
-      </Section>
-
-      <Section title="Calque">
-        <div className="row">
-          <label className="slider">
-            Opacité
-            <input type="range" min={0} max={1} step={0.01} value={node.opacity} onChange={(e) => set({ opacity: Number(e.target.value) })} />
-            <span>{Math.round(node.opacity * 100)} %</span>
-          </label>
+      <Section title="Dimensions">
+        <div className="grid2">
+          <Num label="L" value={node.width} min={1} onChange={(width) => set(resizeProps(node, width, node.height))} />
+          <Num label="H" value={node.height} min={1} onChange={(height) => set(resizeProps(node, node.width, height))} />
         </div>
         {node.type === "frame" && (
           <label className="check">
@@ -70,135 +109,171 @@ export function Properties() {
         )}
       </Section>
 
+      <Section title="Apparence" action={
+        <button className="icon-btn" title={node.visible ? "Masquer" : "Afficher"} onClick={() => set({ visible: !node.visible })}>
+          {node.visible ? <IconEye size={14} /> : <IconEyeOff size={14} />}
+        </button>
+      }>
+        <div className="grid2">
+          <Num label="◐" value={Math.round(node.opacity * 100)} min={0} suffix="%" onChange={(v) => set({ opacity: Math.min(100, v) / 100 })} />
+          {(node.type === "frame" || node.type === "rect" || node.type === "image") && (
+            <Num label="◜" value={node.radius} min={0} onChange={(radius) => set({ radius })} />
+          )}
+        </div>
+      </Section>
+
       {node.text && (
-        <Section title="Texte">
-          <textarea
-            className="text-content"
-            value={node.text.content}
-            onChange={(e) => set({ text: { content: e.target.value } })}
-          />
+        <Section title="Typographie">
+          <input className="full" value={node.text.fontFamily} onChange={(e) => set({ text: { fontFamily: e.target.value } })} />
           <div className="grid2">
-            <Num label="Taille" value={node.text.fontSize} min={1} onChange={(fontSize) => set({ text: { fontSize } })} />
             <select value={node.text.fontWeight} onChange={(e) => set({ text: { fontWeight: Number(e.target.value) } })}>
-              {[300, 400, 500, 600, 700, 800].map((w) => (
-                <option key={w} value={w}>{WEIGHTS[w]}</option>
+              {Object.entries(WEIGHTS).map(([w, label]) => <option key={w} value={w}>{label}</option>)}
+            </select>
+            <Num label="Aa" value={node.text.fontSize} min={1} onChange={(fontSize) => set({ text: { fontSize } })} />
+            <Num label="↕" value={node.text.lineHeight} step={0.05} min={0.5} onChange={(lineHeight) => set({ text: { lineHeight } })} />
+            <div className="seg">
+              {(["left", "center", "right"] as const).map((a) => (
+                <button key={a} className={node.text!.align === a ? "on" : ""} onClick={() => set({ text: { align: a } })} title={a}>
+                  {a === "left" ? "⫷" : a === "center" ? "≡" : "⫸"}
+                </button>
               ))}
-            </select>
-            <Num label="Interl." value={node.text.lineHeight} step={0.05} min={0.5} onChange={(lineHeight) => set({ text: { lineHeight } })} />
-            <select value={node.text.align} onChange={(e) => set({ text: { align: e.target.value as "left" } })}>
-              <option value="left">Gauche</option>
-              <option value="center">Centre</option>
-              <option value="right">Droite</option>
-            </select>
+            </div>
           </div>
-          <input className="font" value={node.text.fontFamily} onChange={(e) => set({ text: { fontFamily: e.target.value } })} />
-          <ColorRow value={node.text.color} onChange={(color) => set({ text: { color: color ?? "#000000" } })} />
+          <textarea className="text-content" value={node.text.content} onChange={(e) => set({ text: { content: e.target.value } })} />
         </Section>
       )}
 
-      <Section title="Code">
-        <button className="ghost" onClick={() => downloadReactZip(doc, node)}>Exporter en React (.zip)</button>
-        <button className="ghost" onClick={() => setCode(exportHtml(toTree(doc, node.id)))}>Exporter en HTML / CSS</button>
+      {node.type === "text" ? (
+        <Section title="Couleur du texte">
+          <ColorRow value={node.text!.color} onChange={(color) => color && set({ text: { color } })} />
+        </Section>
+      ) : (
+        <Section
+          title="Remplissage"
+          action={!node.fill && <button className="icon-btn" title="Ajouter" onClick={() => set({ fill: "#D9D9D9" })}><IconPlus size={14} /></button>}
+        >
+          {node.fill && <ColorRow value={node.fill} onChange={(fill) => set({ fill })} onRemove={() => set({ fill: null })} />}
+        </Section>
+      )}
+
+      <Section
+        title="Contour"
+        action={!node.stroke && <button className="icon-btn" title="Ajouter" onClick={() => set({ stroke: { color: "#000000", width: 1 } })}><IconPlus size={14} /></button>}
+      >
+        {node.stroke && (
+          <>
+            <ColorRow value={node.stroke.color} onChange={(color) => color && set({ stroke: { ...node.stroke!, color } })} onRemove={() => set({ stroke: null })} />
+            <div className="grid2">
+              <Num label="≡" value={node.stroke.width} min={0} onChange={(width) => set({ stroke: { ...node.stroke!, width } })} />
+            </div>
+          </>
+        )}
       </Section>
 
-      {code && <CodeModal code={code} onClose={() => setCode(null)} />}
-    </div>
+      <Section title="Exporter">
+        <button className="btn" onClick={() => downloadReactZip(doc, node.id)}><IconDownload size={14} /> React (.zip)</button>
+        <div className="row">
+          <button className="btn ghost-btn" onClick={() => setHtml(exportHtml(toTree(doc, node.id)))}>HTML / CSS</button>
+          <button className="btn ghost-btn" onClick={() => setRightTab("code")}><IconCode size={14} /> Voir le code</button>
+        </div>
+      </Section>
+
+      {html && (
+        <Modal
+          title="HTML / CSS"
+          onClose={() => setHtml(null)}
+          actions={<button className="ghost" onClick={() => navigator.clipboard.writeText(`<style>\n${html.css}\n</style>\n\n${html.html}`)}>Copier</button>}
+        >
+          <pre>{`<style>\n${html.css}\n</style>\n\n${html.html}`}</pre>
+        </Modal>
+      )}
+    </>
   );
 }
 
-const WEIGHTS: Record<number, string> = { 300: "Light", 400: "Regular", 500: "Medium", 600: "Semibold", 700: "Bold", 800: "Extrabold" };
-const label = (n: DesignNode) => ({ frame: "Frame", rect: "Rectangle", ellipse: "Ellipse", text: "Texte" })[n.type] + " · " + n.name;
+// ---------- Briques ----------
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+export function Section({ title, action, children }: { title: React.ReactNode; action?: React.ReactNode; children?: React.ReactNode }) {
   return (
     <div className="section">
-      <div className="section-title">{title}</div>
+      <div className="section-head">
+        <span className="section-title">{title}</span>
+        {action}
+      </div>
       {children}
     </div>
   );
 }
 
-/** Champ numérique : on valide à Entrée ou en quittant le champ. */
-function Num({ label, value, onChange, min, step = 1 }: { label: string; value: number; onChange: (v: number) => void; min?: number; step?: number }) {
+/** Champ numérique : validé à Entrée ou en quittant le champ ; flèches haut/bas (+Maj) pour ajuster. */
+function Num({ label, value, onChange, min, step = 1, suffix }: { label: string; value: number; onChange: (v: number) => void; min?: number; step?: number; suffix?: string }) {
   const [draft, setDraft] = useState<string | null>(null);
   const shown = draft ?? String(Math.round(value * 100) / 100);
   const commit = () => {
     if (draft === null) return;
-    const v = Number(draft);
+    const v = Number(draft.replace(",", "."));
     setDraft(null);
     if (Number.isFinite(v) && v !== value) onChange(min !== undefined ? Math.max(min, v) : v);
   };
   return (
     <label className="num">
-      <span>{label}</span>
+      <span className="num-label">{label}</span>
       <input
         value={shown}
         inputMode="decimal"
-        step={step}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => {
-          if (e.key === "Enter") commit();
+          if (e.key === "Enter") e.currentTarget.blur(); // valide (onBlur) et rend la main aux raccourcis
           if (e.key === "ArrowUp" || e.key === "ArrowDown") {
             e.preventDefault();
             const d = (e.key === "ArrowUp" ? 1 : -1) * step * (e.shiftKey ? 10 : 1);
-            onChange(Math.round((value + d) * 100) / 100);
+            const next = Math.round((value + d) * 100) / 100;
+            onChange(min !== undefined ? Math.max(min, next) : next);
           }
         }}
       />
+      {suffix && <span className="num-suffix">{suffix}</span>}
     </label>
   );
 }
 
-function ColorRow({ value, onChange, allowNone }: { value: string | null; onChange: (v: string | null) => void; allowNone?: boolean }) {
+/** Ligne couleur façon Figma : pastille, code hexadécimal, opacité en %, bouton retirer. */
+function ColorRow({ value, onChange, onRemove }: { value: string; onChange: (v: string | null) => void; onRemove?: () => void }) {
   const [draft, setDraft] = useState<string | null>(null);
-  const hex = value ? value.slice(0, 7) : "#FFFFFF";
+  const hex = value.slice(1, 7).toUpperCase();
+  const alpha = value.length === 9 ? Math.round((parseInt(value.slice(7), 16) / 255) * 100) : 100;
+  const withAlpha = (h: string, a: number) =>
+    "#" + h + (a >= 100 ? "" : Math.round((Math.max(0, a) / 100) * 255).toString(16).padStart(2, "0").toUpperCase());
   return (
     <div className="color-row">
-      <input type="color" value={hex} onChange={(e) => onChange(e.target.value.toUpperCase() + (value?.slice(7) ?? ""))} />
+      <label className="swatch" style={{ background: value }}>
+        <input type="color" value={"#" + hex} onChange={(e) => onChange(withAlpha(e.target.value.slice(1).toUpperCase(), alpha))} />
+      </label>
       <input
         className="hex"
-        value={draft ?? (value ?? "aucun")}
+        value={draft ?? hex}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => {
           if (draft === null) return;
-          const v = draft.trim().toUpperCase();
+          const v = draft.trim().replace(/^#/, "").toUpperCase();
           setDraft(null);
-          if (/^#([0-9A-F]{6}|[0-9A-F]{8})$/.test(v)) onChange(v);
+          if (/^[0-9A-F]{6}$/.test(v)) onChange(withAlpha(v, alpha));
         }}
         onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
       />
-      {allowNone && value && <button className="ghost" title="Retirer" onClick={() => onChange(null)}>−</button>}
-      {allowNone && !value && <button className="ghost" title="Ajouter" onClick={() => onChange("#D9D9D9")}>+</button>}
+      <input
+        className="alpha"
+        defaultValue={alpha}
+        key={alpha}
+        onBlur={(e) => {
+          const a = Number(e.target.value);
+          if (Number.isFinite(a) && a !== alpha) onChange(withAlpha(hex, Math.min(100, a)));
+        }}
+        onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+      />
+      <span className="num-suffix">%</span>
+      {onRemove && <button className="icon-btn" title="Retirer" onClick={onRemove}><IconMinus size={14} /></button>}
     </div>
   );
-}
-
-function CodeModal({ code, onClose }: { code: { html: string; css: string }; onClose: () => void }) {
-  const full = `<style>\n${code.css}\n</style>\n\n${code.html}`;
-  return (
-    <div className="modal-bg" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <b>HTML / CSS</b>
-          <button className="ghost" onClick={() => navigator.clipboard.writeText(full)}>Copier</button>
-          <button className="ghost" onClick={onClose}>Fermer</button>
-        </div>
-        <pre>{full}</pre>
-      </div>
-    </div>
-  );
-}
-
-/** Un composant React par élément, empaquetés dans un .zip prêt à lancer (npm install && npm run dev). */
-function downloadReactZip(doc: DesignDocument, node: DesignNode) {
-  const files = exportReact(doc, node.id);
-  const folder = node.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\w-]+/g, "-").replace(/^-|-$/g, "") || "nyota-export";
-  const zip = zipSync(Object.fromEntries(Object.entries(files).map(([path, content]) => [`${folder}/${path}`, strToU8(content)])));
-  const url = URL.createObjectURL(new Blob([zip as BlobPart], { type: "application/zip" }));
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${folder}-react.zip`;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

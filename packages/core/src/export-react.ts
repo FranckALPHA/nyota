@@ -7,7 +7,8 @@
 
 import { type DesignDocument, type DesignNode } from "./model.js";
 
-export type FileMap = Record<string, string>;
+/** Fichiers générés : du texte, ou du binaire encodé en base64 (images). */
+export type FileMap = Record<string, string | { base64: string }>;
 
 export interface ReactExportOptions {
   /** Inclure le squelette Vite (package.json, index.html, main.jsx…) pour obtenir un projet lançable. */
@@ -41,7 +42,9 @@ export function exportReact(doc: DesignDocument, rootId: string, opts: ReactExpo
   const files: FileMap = {};
   const walk = (c: Comp) => {
     const dir = `src/components/${c.name}`;
-    files[`${dir}/${c.name}.jsx`] = componentJsx(c);
+    const asset = c.node.image ? imageAsset(c) : null;
+    if (asset?.file) files[asset.file.path] = { base64: asset.file.base64 };
+    files[`${dir}/${c.name}.jsx`] = componentJsx(c, asset?.importPath ?? null);
     files[`${dir}/${c.name}.module.css`] = componentCss(c);
     c.children.forEach(walk);
   };
@@ -54,9 +57,9 @@ export function exportReact(doc: DesignDocument, rootId: string, opts: ReactExpo
 
 // ---------- Composants ----------
 
-function componentJsx(c: Comp): string {
+function componentJsx(c: Comp, imageImport: string | null): string {
   const { node } = c;
-  const kind = { frame: "Frame", rect: "Rectangle", ellipse: "Ellipse", text: "Texte" }[node.type];
+  const kind = { frame: "Frame", rect: "Rectangle", ellipse: "Ellipse", text: "Texte", path: "Vecteur", image: "Image" }[node.type];
   const header = [
     `// ${c.name} — ${kind} « ${node.name} » (généré par Nyota, id ${node.id})`,
     `// Parent : ${c.parent ? c.parent.name : "aucun (composant racine)"}`,
@@ -69,7 +72,31 @@ function componentJsx(c: Comp): string {
   const cx = "[styles.root, className].filter(Boolean).join(\" \")";
 
   let body: string;
-  if (node.type === "text") {
+  if (node.type === "image" && node.image) {
+    const src = imageImport ? "imageSrc" : JSON.stringify(node.image.src);
+    if (imageImport) imports.push(`import imageSrc from "${imageImport}";`);
+    body =
+      `export default function ${c.name}({ className, style, src = ${src}, alt = ${JSON.stringify(node.name)} }) {\n` +
+      `  return <img className={${cx}} style={style} src={src} alt={alt} data-nyota="${c.name}" />;\n` +
+      `}\n`;
+  } else if (node.type === "path" && node.path) {
+    const p = node.path;
+    const attrs = [
+      `d=${JSON.stringify(p.d)}`,
+      isIdentity(p.matrix) ? "" : `transform="matrix(${p.matrix.map(r4).join(" ")})"`,
+      `fill=${JSON.stringify(node.fill ?? "none")}`,
+      p.fillRule === "evenodd" ? `fillRule="evenodd"` : "",
+      node.stroke ? `stroke=${JSON.stringify(node.stroke.color)} strokeWidth={${node.stroke.width}}` : "",
+    ].filter(Boolean);
+    body =
+      `export default function ${c.name}({ className, style }) {\n` +
+      `  return (\n` +
+      `    <svg className={${cx}} style={style} viewBox="0 0 ${r(node.width) || 1} ${r(node.height) || 1}" data-nyota="${c.name}">\n` +
+      `      <path ${attrs.join(" ")} />\n` +
+      `    </svg>\n` +
+      `  );\n` +
+      `}\n`;
+  } else if (node.type === "text") {
     const def = JSON.stringify(node.text?.content ?? "");
     body =
       `export default function ${c.name}({ className, style, text = ${def} }) {\n` +
@@ -113,6 +140,12 @@ function componentCss(c: Comp): string {
       "white-space: pre-wrap",
       "overflow-wrap: break-word",
     );
+  } else if (n.type === "path") {
+    // Le vecteur est dessiné par le <svg> lui-même ; on garde un débordement visible pour les contours.
+    root.push(`height: ${px(n.height)}`, "display: block", "overflow: visible");
+  } else if (n.type === "image") {
+    root.push(`height: ${px(n.height)}`, "display: block", "object-fit: cover");
+    if (n.radius) root.push(`border-radius: ${px(n.radius)}`);
   } else {
     root.push(`height: ${px(n.height)}`);
     if (n.fill) root.push(`background: ${n.fill}`);
@@ -120,7 +153,7 @@ function componentCss(c: Comp): string {
     else if (n.radius) root.push(`border-radius: ${px(n.radius)}`);
     if (n.type === "frame" && n.clip) root.push("overflow: hidden");
   }
-  if (n.stroke && n.stroke.width > 0) {
+  if (n.stroke && n.stroke.width > 0 && n.type !== "path") {
     // Contour centré sur le bord, comme dans l'éditeur (moitié dedans, moitié dehors)
     root.push(`outline: ${px(n.stroke.width)} solid ${n.stroke.color}`, `outline-offset: ${px(-n.stroke.width / 2)}`);
   }
@@ -170,7 +203,7 @@ function projectFiles(tree: Comp, fonts: Set<string>): FileMap {
     "index.html":
       `<!doctype html>\n<html lang="fr">\n  <head>\n    <meta charset="UTF-8" />\n` +
       `    <meta name="viewport" content="width=device-width, initial-scale=1.0" />\n` +
-      `    <title>${escapeHtml(tree.node.name)}</title>\n${fontLink}  </head>\n  <body>\n` +
+      `    <title>${escapeHtml(tree.node.name)}</title>\n    <link rel="icon" href="data:," />\n${fontLink}  </head>\n  <body>\n` +
       `    <div id="root"></div>\n    <script type="module" src="/src/main.jsx"></script>\n  </body>\n</html>\n`,
     "src/main.jsx":
       `import { StrictMode } from "react";\nimport { createRoot } from "react-dom/client";\nimport App from "./App.jsx";\nimport "./index.css";\n\n` +
@@ -221,6 +254,18 @@ const px = (v: number) => `${r(v)}px`;
 const r = (v: number) => Math.round(v * 100) / 100;
 const fontStack = (f: string) => `"${f.replace(/"/g, "")}", system-ui, sans-serif`;
 const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/** Image en data URL → fichier dans src/assets/ ; une URL distante reste telle quelle. */
+function imageAsset(c: Comp): { importPath: string | null; file: { path: string; base64: string } | null } {
+  const m = /^data:image\/([a-z+]+);base64,(.*)$/i.exec(c.node.image!.src);
+  if (!m) return { importPath: null, file: null };
+  const ext = m[1]!.toLowerCase().replace("jpeg", "jpg").replace("svg+xml", "svg");
+  const name = `${c.name}.${ext}`;
+  return { importPath: `../../assets/${name}`, file: { path: `src/assets/${name}`, base64: m[2]! } };
+}
+
+const isIdentity = (m: number[]) => m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 1 && m[4] === 0 && m[5] === 0;
+const r4 = (v: number) => Math.round(v * 10000) / 10000;
 
 function collectFonts(c: Comp, out = new Set<string>()): Set<string> {
   if (c.node.text) out.add(c.node.text.fontFamily);
